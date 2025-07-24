@@ -1383,6 +1383,249 @@ server.tool(
   }
 );
 
+
+// Guest Order Placement Tools (Complete Adobe Commerce REST API Workflow)
+
+server.tool(
+  "create_guest_cart",
+  "Create a new guest cart and return the cart ID for subsequent operations",
+  {},
+  async () => {
+    try {
+      const cartId = await callMagentoApi("/guest-carts", "POST");
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                success: true,
+                cartId: cartId,
+                message: "Guest cart created successfully"
+              },
+              null,
+              2
+            )
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error creating guest cart: ${error.response?.data?.message || error.message}`
+          }
+        ],
+        isError: true
+      };
+    }
+  }
+);
+
+server.tool(
+  "add_item_to_guest_cart",
+  "Add products to the guest cart by SKU and quantity",
+  {
+    cartId: z.string().describe("Guest cart ID"),
+    sku: z.string().describe("Product SKU"),
+    qty: z.number().min(1).describe("Quantity")
+  },
+  async ({ cartId, sku, qty }) => {
+    try {
+      const requestData = {
+        cartItem: {
+          sku: sku,
+          qty: qty,
+          quote_id: cartId
+        }
+      };
+      
+      const result = await callMagentoApi(`/guest-carts/${cartId}/items`, "POST", requestData);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                success: true,
+                cartId: cartId,
+                addedItem: result,
+                message: "Item added to guest cart successfully"
+              },
+              null,
+              2
+            )
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error adding item to guest cart: ${error.response?.data?.message || error.message}`
+          }
+        ],
+        isError: true
+      };
+    }
+  }
+);
+
+server.tool(
+  "set_guest_cart_shipping_information",
+  "Set shipping and billing addresses with shipping method (required before order placement)",
+  {
+    cartId: z.string().describe("Guest cart ID"),
+    shippingAddress: z.object({
+      firstname: z.string().describe("First name"),
+      lastname: z.string().describe("Last name"),
+      street: z.array(z.string()).describe("Street address lines"),
+      city: z.string().describe("City"),
+      region: z.string().describe("Region/State"),
+      region_id: z.number().optional().describe("Region ID (optional)"),
+      region_code: z.string().optional().describe("Region code (optional)"),
+      country_id: z.string().describe("Country code (e.g., US, CA, GB)"),
+      postcode: z.string().describe("Postal/ZIP code"),
+      telephone: z.string().describe("Phone number"),
+      email: z.string().email().describe("Email address")
+    }).describe("Shipping address"),
+    billingAddress: z.object({
+      firstname: z.string().describe("First name"),
+      lastname: z.string().describe("Last name"),
+      street: z.array(z.string()).describe("Street address lines"),
+      city: z.string().describe("City"),
+      region: z.string().describe("Region/State"),
+      region_id: z.number().optional().describe("Region ID (optional)"),
+      region_code: z.string().optional().describe("Region code (optional)"),
+      country_id: z.string().describe("Country code (e.g., US, CA, GB)"),
+      postcode: z.string().describe("Postal/ZIP code"),
+      telephone: z.string().describe("Phone number"),
+      email: z.string().email().describe("Email address")
+    }).optional().describe("Billing address (defaults to shipping address if not provided)"),
+    shippingCarrierCode: z.string().optional().describe("Shipping carrier code (defaults to flatrate)"),
+    shippingMethodCode: z.string().optional().describe("Shipping method code (defaults to flatrate)")
+  },
+  async ({ cartId, shippingAddress, billingAddress, shippingCarrierCode = "flatrate", shippingMethodCode = "flatrate" }) => {
+    try {
+      const finalBillingAddress = billingAddress || shippingAddress;
+      
+      const addressData = {
+        addressInformation: {
+          shipping_address: shippingAddress,
+          billing_address: finalBillingAddress,
+          shipping_carrier_code: shippingCarrierCode,
+          shipping_method_code: shippingMethodCode
+        }
+      };
+      
+      const result = await callMagentoApi(`/guest-carts/${cartId}/shipping-information`, "POST", addressData);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                success: true,
+                cartId: cartId,
+                shippingInfo: result,
+                message: "Shipping and billing information set successfully"
+              },
+              null,
+              2
+            )
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error setting shipping information: ${error.response?.data?.message || error.message}`
+          }
+        ],
+        isError: true
+      };
+    }
+  }
+);
+
+server.tool(
+  "place_guest_order",
+  "Set payment information and place the guest order (must call set_guest_cart_shipping_information first)",
+  {
+    cartId: z.string().describe("Guest cart ID"),
+    email: z.string().email().describe("Guest email address"),
+    paymentMethod: z.string().optional().describe("Payment method code (defaults to checkmo for check/money order)"),
+    billingAddress: z.object({
+      firstname: z.string().describe("First name"),
+      lastname: z.string().describe("Last name"),
+      street: z.array(z.string()).describe("Street address lines"),
+      city: z.string().describe("City"),
+      region: z.string().describe("Region/State"),
+      region_id: z.number().optional().describe("Region ID (optional)"),
+      region_code: z.string().optional().describe("Region code (optional)"),
+      country_id: z.string().describe("Country code (e.g., US, CA, GB)"),
+      postcode: z.string().describe("Postal/ZIP code"),
+      telephone: z.string().describe("Phone number")
+    }).optional().describe("Billing address (if different from shipping address set in previous step)")
+  },
+  async ({ cartId, email, paymentMethod = "checkmo", billingAddress }) => {
+    try {
+      const paymentData = {
+        email: email,
+        paymentMethod: {
+          method: paymentMethod
+        }
+      };
+      
+      if (billingAddress) {
+        paymentData.billing_address = {
+          ...billingAddress,
+          email: email
+        };
+      }
+      
+      const orderId = await callMagentoApi(`/guest-carts/${cartId}/payment-information`, "POST", paymentData);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                success: true,
+                cartId: cartId,
+                orderId: orderId,
+                email: email,
+                paymentMethod: paymentMethod,
+                message: "Guest order placed successfully"
+              },
+              null,
+              2
+            )
+          }
+        ]
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error placing guest order: ${error.response?.data?.message || error.message}`
+          }
+        ],
+        isError: true
+      };
+    }
+  }
+);
+
 // Start the MCP server with stdio transport
 async function main() {
   try {
